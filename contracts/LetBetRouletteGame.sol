@@ -23,6 +23,15 @@ contract LetBetRouletteGame is Ownable {
         GameState status;
         Player player; // current player
     }
+        
+    struct SpinHistory {
+        address player;
+        uint256 spinTimestamp;
+        uint256 gameId;
+        uint256 betAmount;
+        uint256 winAmount;
+        uint64 spinResult;
+    }
     
     address public creditManager; // address of credit manager
     
@@ -34,8 +43,11 @@ contract LetBetRouletteGame is Ownable {
     
     mapping (uint256 => Game) games;
     
+    SpinHistory[] public spinHistory;
+    SpinHistory private temp;
+    
     uint64 public maxIdleMinutes = 3;
-    uint64 public maxNumOfGames = 1000;
+    uint64 public maxNumOfGames = 5000;
     uint256 public betLimit; // 0: no limit
     
     event Start(uint256 gameId);
@@ -79,6 +91,17 @@ contract LetBetRouletteGame is Ownable {
         require(_gameId > 0 && _gameId <= maxNumOfGames);
         
         return (uint8(games[_gameId].status), games[_gameId].player.addr, games[_gameId].player.latestSpinTimestamp, maxIdleMinutes, maxNumOfGames, betLimit);
+    }
+        
+    function getNumOfSpinHistory() public constant returns (uint numOfSpinHistory) {
+        return spinHistory.length;
+    }
+        
+    function getSpinHistory(uint _index) public constant returns (address player, uint256 spinTimestamp, uint256 gameId, uint256 betAmount, uint256 winAmount, uint64 spinResult) {
+        require(_index < spinHistory.length);
+        
+        SpinHistory memory history = spinHistory[_index];
+        return (history.player, history.spinTimestamp, history.gameId, history.betAmount, history.winAmount, history.spinResult);
     }
     
     function existValidGame() public constant returns (bool exist) {
@@ -153,9 +176,11 @@ contract LetBetRouletteGame is Ownable {
     }
     
     function calcWinAmountForNormalBetType(uint64 _randomNumber, NormalBetType _betType, uint64[] _betValue, uint _index, uint256 _betAmount) internal view returns (uint256 winAmount) {
+        require(_betValue.length.sub(_index) >= uint8(_betType));
+    
         uint256 amount = 0;
         
-        if (_randomNumber < 37 && _betType >= NormalBetType.ONE_NUM && _betValue.length == uint8(_betType) && _betAmount > 0) {
+        if (_randomNumber < 37 && _betType >= NormalBetType.ONE_NUM && _betAmount > 0) {
             for (uint i = _index; i < uint8(_betType); ++i) {
                 if (_randomNumber == _betValue[i]) {
                     amount = _betAmount.mul(payoutNormalBetType[uint8(_betType)]);
@@ -218,11 +243,11 @@ contract LetBetRouletteGame is Ownable {
         uint256 betAmountTotal = 0;
         
         for (i = 0; i < _normalBetType.length; ++i) {
-            if (_normalBetType[i] > uint8(NormalBetType.SIX_NUM) || (betLimit > 0 && _normalBetAmount[i] > betLimit)) revert();
+            if (_normalBetType[i] > uint8(NormalBetType.SIX_NUM)) revert();
         }
         
         for (i = 0; i < _specialBetType.length; ++i) {
-            if (_specialBetType[i] > uint8(SpecialBetType.COLUMN_3) || (betLimit > 0 && _specialBetAmount[i] > betLimit)) revert();
+            if (_specialBetType[i] > uint8(SpecialBetType.COLUMN_3)) revert();
         }
         
         for (i = 0; i < _normalBetType.length; ++i) {
@@ -232,6 +257,8 @@ contract LetBetRouletteGame is Ownable {
         for (i = 0; i < _specialBetType.length; ++i) {
             betAmountTotal = betAmountTotal.add(_specialBetAmount[i]);
         }
+        
+        if (betLimit > 0 && betAmountTotal > betLimit) revert();
         
         LetBetCreditManager lbcm = LetBetCreditManager(creditManager);
         
@@ -256,6 +283,9 @@ contract LetBetRouletteGame is Ownable {
         if (winAmount > 0) {
             if (!lbcm.increaseCredit(msg.sender, winAmount)) revert();
         }
+        
+        temp = SpinHistory(msg.sender, now, _gameId, betAmountTotal, winAmount, x);        
+        spinHistory.push(temp);
         
         SpinResult(x, winAmount);
         

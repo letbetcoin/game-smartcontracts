@@ -4,36 +4,6 @@ import 'zeppelin-solidity/contracts/math/SafeMath.sol';
 import 'zeppelin-solidity/contracts/ownership/Ownable.sol';
 import './LetBetCreditManager.sol';
 
-/*
-number | reel_1 | reel_2 | reel_3
-5      |    2   |    2   |    1
-4      |    3   |    2   |    2
-3      |    5   |    4   |    3
-2      |    6   |    5   |    5
-1      |    4   |    7   |    9
-----------------------------------
-total       20       20       20
-
-p(555) = (2/20) * (2/20) * (1/20) = 0.0005
-p(444) = (3/20) * (2/20) * (2/20) = 0.0015
-p(333) = (5/20) * (4/20) * (3/20) = 0.0075
-p(222) = (6/20) * (5/20) * (5/20) = 0.01875
-p(111) = (4/20) * (7/20) * (9/20) = 0.0315
-p(11x) = (4/20) * (7/20) = 0.07
-p(1xx) = (4/20) - 0.07 = 0.13
-
-payout(555) = x100
-payout(444) = x30
-payout(333) = x10
-payout(222) = x6
-payout(111) = x4
-payout(11x) = x3
-payout(1xx) = x2
-
-100 * 0.0005 + 30 * 0.0015 + 10 * 0.0075 + 6 * 0.01875 + 4 * 0.0315 + 3 * 0.07 + 2 * 0.13 = 0.8785
-
-*/
-
 contract LetBetSlotGame is Ownable {
 
     using SafeMath for uint256;
@@ -52,18 +22,29 @@ contract LetBetSlotGame is Ownable {
         Player player; // current player
     }
     
+    struct SpinHistory {
+        address player;
+        uint256 spinTimestamp;
+        uint256 gameId;
+        uint256 betAmount;
+        uint256 winAmount;
+        uint64[3] spinResult;
+    }
+    
     address public creditManager; // address of credit manager
     
-    uint64[20][3] public reel = [[5, 5, 4, 4, 4, 3, 3, 3, 3, 3, 2, 2, 2, 2, 2, 2, 1, 1, 1, 1],
-                                 [5, 5, 4, 4, 3, 3, 3, 3, 2, 2, 2, 2, 2, 1, 1, 1, 1, 1, 1, 1],
-                                 [5, 4, 4, 3, 3, 3, 2, 2, 2, 2, 2, 1, 1, 1, 1, 1, 1, 1, 1, 1]];
+    uint64[20][3] public reel = [[5, 4, 4, 4, 3, 3, 3, 3, 2, 2, 2, 2, 2, 2, 1, 1, 1, 1, 1, 1],
+                                 [5, 5, 4, 4, 3, 3, 3, 3, 2, 2, 2, 2, 2, 2, 2, 1, 1, 1, 1, 1],
+                                 [5, 4, 4, 3, 3, 3, 2, 2, 2, 2, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]];
     
     mapping (uint64 => uint64) public payout;
     
     mapping (uint256 => Game) games;
     
+    SpinHistory[] public spinHistory;
+    
     uint64 public maxIdleMinutes = 3;
-    uint64 public maxNumOfGames = 1000;
+    uint64 public maxNumOfGames = 5000;
     uint256 public betLimit; // 0: no limit
     
     event Start(uint256 gameId);
@@ -95,6 +76,17 @@ contract LetBetSlotGame is Ownable {
         require(_gameId > 0 && _gameId <= maxNumOfGames);
         
         return (uint8(games[_gameId].status), games[_gameId].player.addr, games[_gameId].player.latestSpinTimestamp, maxIdleMinutes, maxNumOfGames, betLimit);
+    }
+    
+    function getNumOfSpinHistory() public constant returns (uint numOfSpinHistory) {
+        return spinHistory.length;
+    }
+    
+    function getSpinHistory(uint _index) public constant returns (address player, uint256 spinTimestamp, uint256 gameId, uint256 betAmount, uint256 winAmount, uint64[3] spinResult) {
+        require(_index < spinHistory.length);
+    
+        SpinHistory memory history = spinHistory[_index];
+        return (history.player, history.spinTimestamp, history.gameId, history.betAmount, history.winAmount, history.spinResult);
     }
     
     function existValidGame() public constant returns (bool exist) {
@@ -177,8 +169,7 @@ contract LetBetSlotGame is Ownable {
         
         LetBetCreditManager lbcm = LetBetCreditManager(creditManager);
         
-        uint256 currentCredit = lbcm.getCredit(msg.sender);
-        if (currentCredit < _betAmount) revert();
+        if (lbcm.getCredit(msg.sender) < _betAmount) revert();
         
         if (!lbcm.decreaseCredit(msg.sender, _betAmount)) revert();
         
@@ -206,6 +197,8 @@ contract LetBetSlotGame is Ownable {
         }
         
         games[_gameId].player.latestSpinTimestamp = now;
+        
+        spinHistory.push(SpinHistory(msg.sender, now, _gameId, _betAmount, winAmount, [x, y, z]));
         
         SpinResult(x, y, z, winAmount);
         

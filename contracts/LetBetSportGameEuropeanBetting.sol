@@ -204,8 +204,7 @@ contract LetBetSportGameEuropeanBetting is Ownable {
         
         LetBetCreditManager lbcm = LetBetCreditManager(creditManager);
         
-        uint256 currentCredit = lbcm.getCredit(msg.sender);
-        if (currentCredit < _betAmount) revert();
+        if (lbcm.getCredit(msg.sender) < _betAmount) revert();
         
         if (!lbcm.decreaseCredit(msg.sender, _betAmount)) revert();
         
