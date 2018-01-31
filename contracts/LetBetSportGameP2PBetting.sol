@@ -17,6 +17,7 @@ contract LetBetSportGameP2PBetting is Ownable {
         BetOption betOption;
         uint256 betAmount;
         uint256 winAmount;
+        uint256 betTimestamp;
     }
 
     struct Game {
@@ -24,6 +25,7 @@ contract LetBetSportGameP2PBetting is Ownable {
         uint16[2] gameScore;
         GameResult result;
         GameState status;
+        uint256 beginTimestamp;
         
         Player[] betWinPlayers;
         Player[] betDrawPlayers;
@@ -41,50 +43,51 @@ contract LetBetSportGameP2PBetting is Ownable {
     
     event RefundAll(uint256 gameId);
     event PerformBetWithPlayer(uint256 gameId, uint8 result);
-    event BetWithPlayer(address player, uint256 gameId, uint8 option, uint256 amount);
+    event BetWithPlayer(address player, uint256 gameId, uint8 option, uint256 amount, uint256 betTimestamp);
     
     function LetBetSportGameP2PBetting(address _creditManager) public {
         creditManager = _creditManager;
     }
     
-    function getInfo(uint256 _gameId) public constant returns (uint16[2] gameScore, uint8 result, uint8 status, uint numOfBetWinPlayers, uint256 betWinTotal, uint numOfBetDrawPlayers, uint256 betDrawTotal, uint numOfBetLosePlayers, uint256 betLoseTotal) {
+    function getInfo(uint256 _gameId) public constant returns (uint16[2] gameScore, uint8 result, uint8 status, uint256 beginTimestamp, uint numOfBetWinPlayers, uint256 betWinTotal, uint numOfBetDrawPlayers, uint256 betDrawTotal, uint numOfBetLosePlayers, uint256 betLoseTotal) {
         Game memory game = games[_gameId];
-        return (game.gameScore, uint8(game.result), uint8(game.status), game.betWinPlayers.length, game.betWinTotal, game.betDrawPlayers.length, game.betDrawTotal, game.betLosePlayers.length, game.betLoseTotal);
+        return (game.gameScore, uint8(game.result), uint8(game.status), game.beginTimestamp, game.betWinPlayers.length, game.betWinTotal, game.betDrawPlayers.length, game.betDrawTotal, game.betLosePlayers.length, game.betLoseTotal);
     }
     
-    function getPlayerBetWinWithPlayer(uint256 _gameId, uint _index) public constant returns (address addr, uint8 betOption, uint256 betAmount, uint256 winAmount) {
+    function getPlayerBetWinWithPlayer(uint256 _gameId, uint _index) public constant returns (address addr, uint8 betOption, uint256 betAmount, uint256 winAmount, uint256 betTimestamp) {
         require(_index < games[_gameId].betWinPlayers.length);
         
         Player memory player = games[_gameId].betWinPlayers[_index];
-        return (player.addr, uint8(player.betOption), player.betAmount, player.winAmount);
+        return (player.addr, uint8(player.betOption), player.betAmount, player.winAmount, player.betTimestamp);
     }
     
-    function getPlayerBetDrawWithPlayer(uint256 _gameId, uint _index) public constant returns (address addr, uint8 betOption, uint256 betAmount, uint256 winAmount) {
+    function getPlayerBetDrawWithPlayer(uint256 _gameId, uint _index) public constant returns (address addr, uint8 betOption, uint256 betAmount, uint256 winAmount, uint256 betTimestamp) {
         require(_index < games[_gameId].betDrawPlayers.length);
         
         Player memory player = games[_gameId].betDrawPlayers[_index];
-        return (player.addr, uint8(player.betOption), player.betAmount, player.winAmount);
+        return (player.addr, uint8(player.betOption), player.betAmount, player.winAmount, player.betTimestamp);
     }
     
-    function getPlayerBetLoseWithPlayer(uint256 _gameId, uint _index) public constant returns (address addr, uint8 betOption, uint256 betAmount, uint256 winAmount) {
+    function getPlayerBetLoseWithPlayer(uint256 _gameId, uint _index) public constant returns (address addr, uint8 betOption, uint256 betAmount, uint256 winAmount, uint256 betTimestamp) {
         require(_index < games[_gameId].betLosePlayers.length);
         
         Player memory player = games[_gameId].betLosePlayers[_index];
-        return (player.addr, uint8(player.betOption), player.betAmount, player.winAmount);
+        return (player.addr, uint8(player.betOption), player.betAmount, player.winAmount, player.betTimestamp);
     }
     
     function getGameList() public constant returns (uint256[] gameIds) {
         return gameList;
     }
     
-    function start(uint256 _gameId) onlyOwner public returns (bool success) {
+    function start(uint256 _gameId, uint256 _beginTimestamp) onlyOwner public returns (bool success) {
         require(games[_gameId].status != GameState.END);
         
         if (games[_gameId].status == GameState.UNKNOWN) {
-            games[_gameId].gameId        = _gameId;
-            games[_gameId].gameScore     = [0, 0];
-            games[_gameId].result        = GameResult.UNKNOWN;
-            games[_gameId].status        = GameState.IN_BET;
+            games[_gameId].gameId         = _gameId;
+            games[_gameId].gameScore      = [0, 0];
+            games[_gameId].result         = GameResult.UNKNOWN;
+            games[_gameId].status         = GameState.IN_BET;
+            games[_gameId].beginTimestamp = _beginTimestamp;
             
             delete games[_gameId].betWinPlayers;
             delete games[_gameId].betDrawPlayers;
@@ -188,31 +191,39 @@ contract LetBetSportGameP2PBetting is Ownable {
         return true;
     }
     
+    function setBeginTimestamp(uint256 _gameId, uint256 _beginTimestamp) onlyOwner public returns (bool success) {
+        require(games[_gameId].status == GameState.IN_BET);
+        
+        games[_gameId].beginTimestamp = _beginTimestamp;
+        
+        return true;
+    }
+    
     function betWithPlayer(uint256 _gameId, uint8 _betOption, uint256 _betAmount) public returns (bool success) {
         require(games[_gameId].status == GameState.IN_BET);
+        require(now < games[_gameId].beginTimestamp);
         require(_betOption >= uint8(BetOption.WIN) && _betOption <= uint8(BetOption.LOSE));
         require(_betAmount > 0);
         
         LetBetCreditManager lbcm = LetBetCreditManager(creditManager);
         
-        uint256 currentCredit = lbcm.getCredit(msg.sender);
-        if (currentCredit < _betAmount) revert();
+        if (lbcm.getCredit(msg.sender) < _betAmount) revert();
         
         if (!lbcm.decreaseCredit(msg.sender, _betAmount)) revert();
         
         BetOption betOption = BetOption(_betOption);
         if (betOption == BetOption.WIN) {
-            games[_gameId].betWinPlayers.push(Player(msg.sender, betOption, _betAmount, 0));
+            games[_gameId].betWinPlayers.push(Player(msg.sender, betOption, _betAmount, 0, now));
             games[_gameId].betWinTotal = games[_gameId].betWinTotal.add(_betAmount);
         } else if (betOption == BetOption.DRAW) {
-            games[_gameId].betDrawPlayers.push(Player(msg.sender, betOption, _betAmount, 0));
+            games[_gameId].betDrawPlayers.push(Player(msg.sender, betOption, _betAmount, 0, now));
             games[_gameId].betDrawTotal = games[_gameId].betDrawTotal.add(_betAmount);
         } else if (betOption == BetOption.LOSE) {
-            games[_gameId].betLosePlayers.push(Player(msg.sender, betOption, _betAmount, 0));
+            games[_gameId].betLosePlayers.push(Player(msg.sender, betOption, _betAmount, 0, now));
             games[_gameId].betLoseTotal = games[_gameId].betLoseTotal.add(_betAmount);
         }
         
-        BetWithPlayer(msg.sender, _gameId, _betOption, _betAmount);
+        BetWithPlayer(msg.sender, _gameId, _betOption, _betAmount, now);
         
         return true;
     }
