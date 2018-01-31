@@ -22,14 +22,29 @@ contract LetBetJackpotSlotGame is Ownable {
         Player player; // current player
     }
     
+    struct SpinHistory {
+        address player;
+        uint256 spinTimestamp;
+        uint256 gameId;
+        uint256 betAmount;
+        uint256 winAmount;
+        uint64[3] spinResult;
+    }
+    
     address public creditManager; // address of credit manager
     
-    mapping (uint64 => uint8[2]) public reward; // reward rules
+    uint64[20][3] public reel = [[5, 4, 4, 4, 3, 3, 3, 3, 2, 2, 2, 2, 2, 2, 1, 1, 1, 1, 1, 1],
+                                 [5, 5, 4, 4, 3, 3, 3, 3, 2, 2, 2, 2, 2, 2, 2, 1, 1, 1, 1, 1],
+                                 [5, 4, 4, 3, 3, 3, 2, 2, 2, 2, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]];
+    
+    mapping (uint64 => uint64) public payout;
     
     mapping (uint256 => Game) games;
     
+    SpinHistory[] public spinHistory;
+    
     uint64 public maxIdleMinutes = 3;
-    uint64 public maxNumOfGames = 1000;
+    uint64 public maxNumOfGames = 5000;
     uint256 public betLimit; // 0: no limit
     
     event Start(uint256 gameId);
@@ -38,19 +53,19 @@ contract LetBetJackpotSlotGame is Ownable {
     function LetBetJackpotSlotGame(address _creditManager) public {
         creditManager = _creditManager;
         
-        reward[555] = [4, 1];
-        reward[444] = [7, 2];
-        reward[333] = [3, 1];
-        reward[222] = [5, 2];
-        reward[111] = [2, 1];
-        reward[1]   = [3, 2];
-        reward[0]   = [5, 4];
+        payout[555] = 100;
+        payout[444] = 30;
+        payout[333] = 10;
+        payout[222] = 6;
+        payout[111] = 4;
+        payout[1]   = 3;
+        payout[0]   = 2;
     }
     
     function random(uint256 _gameId, uint64 _upper) internal returns (uint64 randomNumber) {
         games[_gameId].seed = uint64(keccak256(keccak256(block.blockhash(block.number), games[_gameId].seed), now));
         
-        return (games[_gameId].seed % _upper + 1);
+        return games[_gameId].seed % _upper;
     }
     
     function hasOverMaxIdleTime(uint256 _timestamp) internal view returns (bool hasOver) {
@@ -61,6 +76,17 @@ contract LetBetJackpotSlotGame is Ownable {
         require(_gameId > 0 && _gameId <= maxNumOfGames);
         
         return (uint8(games[_gameId].status), games[_gameId].player.addr, games[_gameId].player.latestSpinTimestamp, maxIdleMinutes, maxNumOfGames, betLimit);
+    }
+    
+    function getNumOfSpinHistory() public constant returns (uint numOfSpinHistory) {
+        return spinHistory.length;
+    }
+    
+    function getSpinHistory(uint _index) public constant returns (address player, uint256 spinTimestamp, uint256 gameId, uint256 betAmount, uint256 winAmount, uint64[3] spinResult) {
+        require(_index < spinHistory.length);
+    
+        SpinHistory memory history = spinHistory[_index];
+        return (history.player, history.spinTimestamp, history.gameId, history.betAmount, history.winAmount, history.spinResult);
     }
     
     function existValidGame() public constant returns (bool exist) {
@@ -143,35 +169,36 @@ contract LetBetJackpotSlotGame is Ownable {
         
         LetBetCreditManager lbcm = LetBetCreditManager(creditManager);
         
-        uint256 currentCredit = lbcm.getCredit(msg.sender);
-        if (currentCredit < _betAmount) revert();
+        if (lbcm.getCredit(msg.sender) < _betAmount) revert();
         
         if (!lbcm.decreaseCredit(msg.sender, _betAmount)) revert();
         
-        uint64 x = random(_gameId, 5);
-        uint64 y = random(_gameId, 5);
-        uint64 z = random(_gameId, 5);
+        uint64 x = reel[0][random(_gameId, 20)];
+        uint64 y = reel[1][random(_gameId, 20)];
+        uint64 z = reel[2][random(_gameId, 20)];
         
         uint256 winAmount = 0;
-        uint8[2] memory winRate = [0, 0];
+        uint64 winRate = 0;
         
         if (x == 1 && (y != 1 || z != 1)) {
             if (y == 1) {
-                winRate = reward[1];
+                winRate = payout[1];
             } else {
-                winRate = reward[0];
+                winRate = payout[0];
             }
         } else {
             uint64 n = x * 100 + y * 10 + z;
-            winRate = reward[n];
+            winRate = payout[n];
         }
         
-        if (winRate[0] > 0 && winRate[1] > 0) {
-            winAmount = _betAmount.mul(winRate[0]).div(winRate[1]);
+        if (winRate > 0) {
+            winAmount = _betAmount.mul(winRate);
             if (!lbcm.increaseCredit(msg.sender, winAmount)) revert();
         }
         
         games[_gameId].player.latestSpinTimestamp = now;
+        
+        spinHistory.push(SpinHistory(msg.sender, now, _gameId, _betAmount, winAmount, [x, y, z]));
         
         SpinResult(x, y, z, winAmount);
         
